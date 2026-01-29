@@ -100,8 +100,130 @@ cat > "$CONTENTS_DIR/document.wflow" << 'DOCUMENTWFLOW'
                 <dict>
                     <key>source</key>
                     <string>on run {input, parameters}
-    -- Placeholder: AppleScript will be added in next task
-    display notification "Google Meet Mute Toggle" with title "Quick Action"
+    -- Google Meet Global Mute Toggle
+    -- Finds all Meet tabs in Arc and toggles them to the same mute state
+    
+    set appName to "Arc"
+    
+    -- Check if Arc is running
+    if application appName is not running then
+        display notification "Arc browser is not running" with title "Google Meet Mute" sound name "Basso"
+        return input
+    end if
+    
+    tell application "Arc"
+        set meetTabs to {}
+        
+        -- Iterate all windows and tabs to find Meet tabs
+        try
+            repeat with w in windows
+                try
+                    repeat with t in tabs of w
+                        try
+                            set tabURL to URL of t
+                            if tabURL contains "meet.google.com" then
+                                set end of meetTabs to t
+                            end if
+                        end try
+                    end repeat
+                end try
+            end repeat
+        end try
+        
+        -- Handle no Meet tabs found
+        if (count of meetTabs) = 0 then
+            display notification "No Google Meet tabs found" with title "Google Meet Mute" sound name "Basso"
+            return input
+        end if
+        
+        -- JavaScript to check if muted (returns "muted" or "unmuted" or "unknown")
+        set checkMuteJS to "
+            (function() {
+                var btn = document.querySelector('[aria-label*=\"microphone\"]');
+                if (!btn) return 'unknown';
+                var label = btn.getAttribute('aria-label') || '';
+                if (label.includes('Turn on')) return 'muted';
+                if (label.includes('Turn off')) return 'unmuted';
+                return 'unknown';
+            })();
+        "
+        
+        -- JavaScript to toggle mute using Cmd+D keyboard shortcut
+        set toggleMuteJS to "
+            (function() {
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: 'd',
+                    code: 'KeyD',
+                    keyCode: 68,
+                    which: 68,
+                    metaKey: true,
+                    bubbles: true
+                }));
+                return 'toggled';
+            })();
+        "
+        
+        -- Get the mute state of the first tab to determine target state
+        set firstTab to item 1 of meetTabs
+        set firstTabState to "unknown"
+        try
+            tell firstTab
+                set firstTabState to execute javascript checkMuteJS
+            end tell
+        end try
+        
+        -- Determine target state: if first is muted, we unmute all; if unmuted, we mute all
+        -- If unknown, we just toggle all
+        set targetState to "unknown"
+        if firstTabState is "muted" then
+            set targetState to "unmuted"
+        else if firstTabState is "unmuted" then
+            set targetState to "muted"
+        end if
+        
+        -- Process each Meet tab
+        set affectedCount to 0
+        repeat with meetTab in meetTabs
+            try
+                -- Check current state of this tab
+                set currentState to "unknown"
+                tell meetTab
+                    set currentState to execute javascript checkMuteJS
+                end tell
+                
+                -- Only toggle if needed (or if state is unknown)
+                set needsToggle to false
+                if targetState is "unknown" then
+                    set needsToggle to true
+                else if currentState is not targetState then
+                    set needsToggle to true
+                end if
+                
+                if needsToggle then
+                    tell meetTab
+                        execute javascript toggleMuteJS
+                    end tell
+                    set affectedCount to affectedCount + 1
+                end if
+            end try
+        end repeat
+        
+        -- Show result notification
+        set tabWord to "tab"
+        if affectedCount is not 1 then
+            set tabWord to "tabs"
+        end if
+        
+        if targetState is "muted" then
+            display notification "Muted " &amp; affectedCount &amp; " " &amp; tabWord with title "Google Meet Mute"
+        else if targetState is "unmuted" then
+            display notification "Unmuted " &amp; affectedCount &amp; " " &amp; tabWord with title "Google Meet Mute"
+        else
+            display notification "Toggled " &amp; affectedCount &amp; " " &amp; tabWord with title "Google Meet Mute"
+        end if
+        
+    end tell
+    
     return input
 end run</string>
                 </dict>
@@ -238,8 +360,7 @@ echo ""
 echo "================================================"
 echo "Installation complete!"
 echo "================================================"
-echo ""
 echo "Next steps:"
-echo "1. The AppleScript will be added in a future update"
-echo "2. Keyboard shortcut will be configured separately"
+echo "1. Assign a keyboard shortcut in System Settings > Keyboard > Keyboard Shortcuts > Services"
+echo "2. Look for 'Toggle Google Meet Mute' under 'General'"
 echo ""
