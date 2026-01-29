@@ -1,22 +1,23 @@
 # Google Meet Global Mute Button
 
-A global keyboard shortcut for macOS that toggles mute in **all** Google Meet tabs across Arc browser windows, regardless of which application is currently focused.
+A global keyboard shortcut for macOS that toggles mute in **all** Google Meet tabs across Arc and Google Chrome browser windows, regardless of which application is currently focused.
 
 Press **F5** from anywhere and all your Meet tabs instantly mute/unmute with audio feedback.
 
 ## Features
 
-- **Global shortcut** - Works from any application, no need to switch to Arc
+- **Global shortcut** - Works from any application, no need to switch to your browser
+- **Multi-browser support** - Works with both Arc and Google Chrome
 - **Multi-tab support** - Toggles mute on ALL Meet tabs simultaneously
 - **Audio feedback** - Distinct sounds for muted, unmuted, and error states
-- **Fast** - Responds in under 200ms
+- **Fast** - Responds in under 300ms
 - **Simple** - One script to install, one to uninstall
 
 ## Requirements
 
 - **macOS**
-- **[Arc browser](https://arc.net/)**
 - **[Karabiner-Elements](https://karabiner-elements.pqrs.org/)** - For global keyboard shortcuts
+- **[Arc browser](https://arc.net/)** and/or **Google Chrome**
 
 ## Installation
 
@@ -31,6 +32,14 @@ cd google-meet-mute-btn
 
 The shortcut works immediately - no restart required.
 
+### Chrome Users
+
+You must enable JavaScript execution from AppleScript in Chrome:
+
+1. Open Google Chrome
+2. Go to menu: **View > Developer > Allow JavaScript from Apple Events**
+3. Confirm the prompt
+
 ## Usage
 
 | Key | Action |
@@ -43,7 +52,7 @@ The shortcut works immediately - no restart required.
 |-------|---------|
 | **Morse** (beep) | You are now MUTED |
 | **Pop** | You are now UNMUTED |
-| **Basso** (low tone) | No Meet tab found, not in meeting, or Arc not running |
+| **Basso** (low tone) | No Meet tab found, not in meeting, or no supported browser running |
 
 ## Uninstallation
 
@@ -56,10 +65,11 @@ This removes the toggle script and the Karabiner rule.
 ## How It Works
 
 1. **Karabiner-Elements** intercepts F5 and runs `~/.local/bin/toggle-meet-mute.sh`
-2. The script uses AppleScript to bulk-fetch all tab URLs from Arc
-3. Finds Google Meet tabs and checks their mute state via JavaScript
-4. Dispatches `Cmd+D` keyboard event to toggle mute (Meet's native shortcut)
-5. Plays a sound to indicate the new state
+2. The script detects which browsers are running (Arc and/or Chrome)
+3. Uses AppleScript to bulk-fetch all tab URLs from each browser
+4. Finds Google Meet tabs and checks their mute state via JavaScript
+5. Dispatches `Cmd+D` keyboard event to toggle mute (Meet's native shortcut)
+6. Plays a sound to indicate the new state
 
 ## Customization
 
@@ -76,6 +86,9 @@ Edit `~/.local/bin/toggle-meet-mute.sh` and replace the `afplay` commands with d
 **Shortcut doesn't work**
 - Make sure Karabiner-Elements is running
 - Check System Settings > Privacy & Security > Accessibility - Karabiner needs permission
+
+**Chrome: "No Meet tab found" even though I'm in a meeting**
+- Make sure you've enabled "Allow JavaScript from Apple Events" in Chrome (View > Developer menu)
 
 **"No Meet tab found" sound plays but I'm in a meeting**
 - Make sure you've actually joined the meeting (not just on the landing page)

@@ -40,7 +40,7 @@ cat > "$SCRIPT_PATH" << 'SCRIPT'
 # Strategy: Run parallel osascript processes for each window with short timeouts
 # Use the first results that come back, ignore slow/stuck windows
 
-TIMEOUT_SEC=0.15
+TIMEOUT_SEC=0.3
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
@@ -48,15 +48,28 @@ trap "rm -rf $TMPDIR" EXIT
 set +m
 exec 2>/dev/null
 
-# Check if Arc is running
-if ! pgrep -q "Arc"; then
+# Detect which browsers are running
+arc_running=false
+chrome_running=false
+if pgrep -q "Arc"; then
+    arc_running=true
+fi
+if pgrep -q "Google Chrome"; then
+    chrome_running=true
+fi
+
+if ! $arc_running && ! $chrome_running; then
     afplay /System/Library/Sounds/Basso.aiff &
     exit 0
 fi
 
 # Phase 1: Get Meet tab locations from all windows (fast, no JS)
-# Output format: winNum:tabIdx:meetingURL (one per line)
-meet_tabs=$(osascript << 'EOF'
+# Output format: browser:winNum:tabIdx:meetingURL (one per line)
+meet_tabs=""
+
+# Get Arc tabs
+if $arc_running; then
+    arc_tabs=$(osascript << 'EOF'
 tell application "Arc"
     set output to ""
     set windowCount to count of windows
@@ -66,7 +79,7 @@ tell application "Arc"
             repeat with i from 1 to count of allURLs
                 set tabURL to item i of allURLs
                 if tabURL contains "meet.google.com" and tabURL does not contain "/landing" then
-                    set output to output & winNum & ":" & i & ":" & tabURL & linefeed
+                    set output to output & "arc:" & winNum & ":" & i & ":" & tabURL & linefeed
                 end if
             end repeat
         end try
@@ -75,6 +88,38 @@ tell application "Arc"
 end tell
 EOF
 )
+    if [ -n "$arc_tabs" ]; then
+        meet_tabs="${meet_tabs}${arc_tabs}"
+        # Ensure newline at end
+        [[ "$meet_tabs" != *$'\n' ]] && meet_tabs="${meet_tabs}"$'\n'
+    fi
+fi
+
+# Get Chrome tabs
+if $chrome_running; then
+    chrome_tabs=$(osascript << 'EOF'
+tell application "Google Chrome"
+    set output to ""
+    set windowCount to count of windows
+    repeat with winNum from 1 to windowCount
+        try
+            set tabCount to count of tabs of window winNum
+            repeat with i from 1 to tabCount
+                set tabURL to URL of tab i of window winNum
+                if tabURL contains "meet.google.com" and tabURL does not contain "/landing" then
+                    set output to output & "chrome:" & winNum & ":" & i & ":" & tabURL & linefeed
+                end if
+            end repeat
+        end try
+    end repeat
+    return output
+end tell
+EOF
+)
+    if [ -n "$chrome_tabs" ]; then
+        meet_tabs="${meet_tabs}${chrome_tabs}"
+    fi
+fi
 
 if [ -z "$meet_tabs" ]; then
     afplay /System/Library/Sounds/Basso.aiff &
@@ -84,8 +129,8 @@ fi
 # Save meet tabs to file for processing
 echo "$meet_tabs" > "$TMPDIR/meet_tabs.txt"
 
-# Get unique meeting URLs
-cut -d: -f3- "$TMPDIR/meet_tabs.txt" | sort -u > "$TMPDIR/unique_meetings.txt"
+# Get unique meeting URLs (format is browser:winNum:tabIdx:meetingURL, so field 4+)
+cut -d: -f4- "$TMPDIR/meet_tabs.txt" | sort -u > "$TMPDIR/unique_meetings.txt"
 
 if [ ! -s "$TMPDIR/unique_meetings.txt" ]; then
     afplay /System/Library/Sounds/Basso.aiff &
@@ -94,7 +139,7 @@ fi
 
 # Phase 2: For each unique meeting, try all its window locations in parallel
 # Launch all processes at once
-while IFS=: read -r winNum tabIdx meetingURL; do
+while IFS=: read -r browser winNum tabIdx meetingURL; do
     [ -z "$meetingURL" ] && continue
     # Create unique filename from meeting URL
     safe_name=$(echo "$meetingURL" | md5)
@@ -106,8 +151,9 @@ while IFS=: read -r winNum tabIdx meetingURL; do
     fi
     
     # Launch in background with osascript timeout
-    (
-        result=$(osascript 2>/dev/null << INNEREOF
+    if [ "$browser" = "arc" ]; then
+        (
+            result=$(osascript 2>/dev/null << INNEREOF
 tell application "Arc"
     with timeout of 1 seconds
         tell tab $tabIdx of window $winNum
@@ -116,18 +162,42 @@ tell application "Arc"
     end timeout
 end tell
 INNEREOF
-        )
-        if [ -n "$result" ] && [[ "$result" != *"not-in-meeting"* ]]; then
-            # Only write if no result yet (first wins)
-            if [ ! -f "$result_file" ]; then
-                if [[ "$result" == *"Turn off"* ]]; then
-                    echo "$winNum:$tabIdx:unmuted" > "$result_file"
-                else
-                    echo "$winNum:$tabIdx:muted" > "$result_file"
+            )
+            if [ -n "$result" ] && [[ "$result" != *"not-in-meeting"* ]]; then
+                # Only write if no result yet (first wins)
+                if [ ! -f "$result_file" ]; then
+                    if [[ "$result" == *"Turn off"* ]]; then
+                        echo "arc:${winNum}:${tabIdx}:unmuted" > "$result_file"
+                    else
+                        echo "arc:${winNum}:${tabIdx}:muted" > "$result_file"
+                    fi
                 fi
             fi
-        fi
-    ) 2>/dev/null &
+        ) 2>/dev/null &
+    elif [ "$browser" = "chrome" ]; then
+        (
+            result=$(osascript 2>/dev/null << INNEREOF
+tell application "Google Chrome"
+    with timeout of 1 seconds
+        tell tab $tabIdx of window $winNum
+            execute javascript "(() => { const btn = document.querySelector('[aria-label*=microphone]'); return btn ? btn.getAttribute('aria-label') : 'not-in-meeting'; })()"
+        end tell
+    end timeout
+end tell
+INNEREOF
+            )
+            if [ -n "$result" ] && [[ "$result" != *"not-in-meeting"* ]]; then
+                # Only write if no result yet (first wins)
+                if [ ! -f "$result_file" ]; then
+                    if [[ "$result" == *"Turn off"* ]]; then
+                        echo "chrome:${winNum}:${tabIdx}:unmuted" > "$result_file"
+                    else
+                        echo "chrome:${winNum}:${tabIdx}:muted" > "$result_file"
+                    fi
+                fi
+            fi
+        ) 2>/dev/null &
+    fi
 done < "$TMPDIR/meet_tabs.txt"
 
 # Wait for timeout then kill stragglers
@@ -173,14 +243,17 @@ while read -r meetingURL; do
     
     if [ -f "$result_file" ]; then
         result=$(cat "$result_file")
-        winNum="${result%%:*}"
+        browser="${result%%:*}"
         rest="${result#*:}"
+        winNum="${rest%%:*}"
+        rest="${rest#*:}"
         tabIdx="${rest%%:*}"
         current_state="${rest##*:}"
         
         if [ "$current_state" != "$target_state" ]; then
             # Fire and forget toggle
-            osascript 2>/dev/null << TOGGLEEOF &
+            if [ "$browser" = "arc" ]; then
+                osascript 2>/dev/null << TOGGLEEOF &
 tell application "Arc"
     with timeout of 1 seconds
         tell tab $tabIdx of window $winNum
@@ -189,6 +262,17 @@ tell application "Arc"
     end timeout
 end tell
 TOGGLEEOF
+            elif [ "$browser" = "chrome" ]; then
+                osascript 2>/dev/null << TOGGLEEOF &
+tell application "Google Chrome"
+    with timeout of 1 seconds
+        tell tab $tabIdx of window $winNum
+            execute javascript "document.dispatchEvent(new KeyboardEvent('keydown',{key:'d',code:'KeyD',keyCode:68,metaKey:true,bubbles:true}));"
+        end tell
+    end timeout
+end tell
+TOGGLEEOF
+            fi
         fi
     fi
 done < "$TMPDIR/unique_meetings.txt"
@@ -277,6 +361,10 @@ echo "Sound feedback:"
 echo "  - Morse (beep): You are now MUTED"
 echo "  - Pop: You are now UNMUTED"
 echo "  - Basso (low tone): No Meet tab found or error"
+echo ""
+echo "IMPORTANT - Chrome users:"
+echo "  You must enable JavaScript from AppleScript in Chrome:"
+echo "  Menu: View > Developer > Allow JavaScript from Apple Events"
 echo ""
 echo "Files installed:"
 echo "  - $SCRIPT_PATH"

@@ -46,7 +46,7 @@
 - AppleScript finds all Meet tabs and dispatches keyboard events
 
 **Pros:**
-- Works with Arc browser out of the box
+- Works with Arc and Chrome browsers
 - Can be triggered by ANY key via Karabiner
 - No sandboxing issues - Karabiner runs scripts with full permissions
 - Works on background tabs (not just active tab)
@@ -54,8 +54,47 @@
 **Cons:**
 - Requires Karabiner-Elements
 - macOS only
+- Chrome requires enabling "Allow JavaScript from Apple Events" setting
 
 **Conclusion:** Best fit for requirements. This is what we implemented.
+
+---
+
+## Google Chrome AppleScript Requirements
+
+Chrome requires a manual setting to be enabled before AppleScript can execute JavaScript in tabs.
+
+### Enabling JavaScript from Apple Events
+
+1. Open Google Chrome
+2. Go to menu: **View > Developer > Allow JavaScript from Apple Events**
+3. Confirm the prompt
+
+Without this setting, you'll get the error:
+```
+Executing JavaScript through AppleScript is turned off.
+```
+
+### Why Chrome Requires This
+
+This is a security measure. Unlike Arc, Chrome doesn't allow arbitrary JavaScript execution by default. The user must explicitly opt-in.
+
+### AppleScript for Chrome
+
+Chrome's AppleScript is more standard than Arc's. You can iterate tabs directly:
+
+```applescript
+tell application "Google Chrome"
+    repeat with i from 1 to count of tabs of window 1
+        set tabURL to URL of tab i of window 1
+        if tabURL contains "meet.google.com" then
+            tell tab i of window 1
+                execute javascript "document.title"
+            end tell
+        end if
+    end repeat
+end tell
+```
 
 ---
 

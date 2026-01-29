@@ -2,14 +2,14 @@
 
 ## Goal
 
-Create a global keyboard shortcut that toggles mute in ALL Google Meet tabs in Arc browser, regardless of which window is currently focused.
+Create a global keyboard shortcut that toggles mute in ALL Google Meet tabs in Arc and Google Chrome browsers, regardless of which window is currently focused.
 
 ## Final Solution: Karabiner-Elements + AppleScript
 
 After exploring multiple approaches, we settled on **Karabiner-Elements directly executing a shell script** because:
 
 1. **No sandboxing issues** - Unlike Automator Quick Actions, Karabiner runs scripts with full permissions
-2. **Arc browser support** - Arc allows JavaScript execution via AppleScript without special settings
+2. **Arc and Chrome browser support** - Both allow JavaScript execution via AppleScript
 3. **Simple single-key trigger** - F5 (dictation key) directly runs the script
 4. **Works on background tabs** - Using the bulk-fetch URL approach (see below)
 
@@ -28,15 +28,16 @@ We initially tried creating a macOS Quick Action triggered by `Ctrl+Shift+Option
                                     ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Bash Script (~/.local/bin/toggle-meet-mute.sh)                 │
-│  1. Calls AppleScript via osascript                             │
-│  2. Gets result: "muted", "unmuted", "error", or "none"         │
-│  3. Plays appropriate macOS system sound                        │
+│  1. Detects running browsers (Arc and/or Chrome)                │
+│  2. Calls AppleScript via osascript for each browser            │
+│  3. Gets result: "muted", "unmuted", "error", or "none"         │
+│  4. Plays appropriate macOS system sound                        │
 └─────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  AppleScript (~/.local/bin/toggle-meet-mute.scpt)               │
-│  1. Try each Arc window with 0.1s timeout (avoids hangs)        │
+│  AppleScript (inline in bash script)                            │
+│  1. Try each browser window with timeout (avoids hangs)         │
 │  2. Bulk-fetch all tab URLs per window (fast)                   │
 │  3. Find Meet tabs by URL, check mute state                     │
 │  4. Execute JavaScript to dispatch Cmd+D keyboard event         │
@@ -44,15 +45,21 @@ We initially tried creating a macOS Quick Action triggered by `Ctrl+Shift+Option
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Supported Browsers
+
+| Browser | Support | Setup Required |
+|---------|---------|----------------|
+| Arc | Full | None |
+| Google Chrome | Full | Enable "Allow JavaScript from Apple Events" in View > Developer menu |
+
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `~/.local/bin/toggle-meet-mute.sh` | Bash wrapper that calls AppleScript and plays sounds |
-| `~/.local/bin/toggle-meet-mute.scpt` | AppleScript that finds Meet tabs and toggles mute |
+| `~/.local/bin/toggle-meet-mute.sh` | Bash script that finds Meet tabs and toggles mute |
 | `~/.config/karabiner/karabiner.json` | Karabiner config with F5 → script binding |
-| `install.sh` | Creates both scripts and updates Karabiner config |
-| `uninstall.sh` | Removes the scripts and Karabiner rule |
+| `install.sh` | Creates the script and updates Karabiner config |
+| `uninstall.sh` | Removes the script and Karabiner rule |
 
 ## Keyboard Shortcut
 
