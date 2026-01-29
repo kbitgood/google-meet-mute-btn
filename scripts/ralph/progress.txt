@@ -1,0 +1,132 @@
+# Ralph Progress Log
+Started: 2026-01-29
+Feature: Google Meet Global Mute Button
+
+## Codebase Patterns
+(Patterns discovered during this feature build)
+- macOS Quick Actions are stored as .workflow bundles in ~/Library/Services/
+- Workflow bundles require Info.plist (service metadata) and document.wflow (Automator actions)
+- Both plist files must be valid XML, verified with `plutil -lint`
+- Arc's `execute javascript` can hang indefinitely - always use `with timeout` wrapper
+- Google Meet URLs: only process actual meetings (xxx-xxxx-xxx), not landing/home pages
+
+---
+
+## 2026-01-29 13:33 - P0-1: Create install.sh with workflow bundle structure
+- Created install.sh bash script with proper shebang
+- Generated workflow directory at ~/Library/Services/Toggle Google Meet Mute.workflow/Contents/
+- Created valid Info.plist with NSServices metadata (NSMenuItem, NSMessage, etc.)
+- Created placeholder document.wflow with correct Automator structure (Run AppleScript action)
+- Made script idempotent (removes existing workflow before creating new one)
+- Added echo statements showing progress
+- Verified both plist files pass `plutil -lint` validation
+- Tested idempotency (running twice works without errors)
+- Committed: feat(P0-1): Create install.sh with workflow bundle structure
+---
+
+
+## 2026-01-29 13:34 - P0-1: Create install.sh with workflow bundle structure
+- Completed by Ralph
+---
+
+## 2026-01-29 - P0-2: Implement AppleScript for mute toggle
+- Updated install.sh to embed full AppleScript in document.wflow
+- AppleScript iterates all Arc windows and tabs to find Meet tabs
+- Finds tabs where URL contains "meet.google.com"
+- JavaScript checks mute state by querying aria-label of microphone button
+- First Meet tab's state determines target state (if muted -> unmute all, if unmuted -> mute all)
+- Each tab only toggled if its state differs from target (syncs all tabs)
+- Toggle uses JavaScript KeyboardEvent dispatch (Cmd+D)
+- Displays macOS notification with result ("Muted X tabs" or "Unmuted X tabs")
+- Handles Arc not running case with notification and error sound
+- Handles no Meet tabs found with notification and error sound
+- Verified both plist files pass `plutil -lint` validation
+- Committed: feat(P0-2): Implement AppleScript for mute toggle
+---
+
+## 2026-01-29 13:35 - P0-2: Implement AppleScript for mute toggle
+- Completed by Ralph
+---
+
+## 2026-01-29 13:37 - P0-3: Add keyboard shortcut registration
+- Added keyboard shortcut registration to install.sh
+- Uses PlistBuddy to write to ~/Library/Preferences/pbs.plist (more reliable than `defaults write` for keys with parentheses)
+- Registers shortcut with key `(null) - Toggle Google Meet Mute - runWorkflowAsService`
+- Shortcut encoding `^$~@m` = Ctrl+Shift+Option+Cmd+M
+- Runs `/System/Library/CoreServices/pbs -update` before and after to refresh services
+- Made registration idempotent (deletes existing entry before adding new one)
+- Updated success message with keyboard shortcut instructions
+- Added note about needing to log out/in if shortcut doesn't work immediately
+- Verified with `defaults read pbs NSServicesStatus` shows correct entry
+- Tested idempotency (running install.sh twice works without errors)
+- Committed: feat(P0-3): Add keyboard shortcut registration
+---
+
+## 2026-01-29 13:37 - P0-3: Add keyboard shortcut registration
+- Completed by Ralph
+---
+
+## 2026-01-29 13:38 - P0-4: Create uninstall.sh
+- Created uninstall.sh bash script
+- Removes workflow directory ~/Library/Services/Toggle Google Meet Mute.workflow/
+- Removes keyboard shortcut entry from pbs.plist using PlistBuddy
+- Runs `/System/Library/CoreServices/pbs -update` to refresh services
+- Displays appropriate success message confirming removal
+- Handles idempotent case: shows "Nothing to uninstall" when already uninstalled (no error)
+- Script made executable with chmod +x
+- Tested full install/uninstall cycle to verify workflow and shortcut are properly removed
+- Committed: feat(P0-4): Create uninstall.sh
+---
+
+## 2026-01-29 13:38 - P0-4: Create uninstall.sh
+- Completed by Ralph
+---
+
+## 2026-01-29 13:39 - P0-4: Create uninstall.sh
+- Completed by Ralph
+---
+
+## 2026-01-29 13:40 - P0-5: Test and fix edge cases
+### Tests Performed:
+- ✅ install.sh runs without errors
+- ✅ Both plist files pass `plutil -lint` validation
+- ✅ Keyboard shortcut registered correctly in pbs.plist (^$~@m = Ctrl+Shift+Option+Cmd+M)
+- ✅ uninstall.sh removes workflow directory
+- ✅ uninstall.sh removes keyboard shortcut from pbs.plist
+- ✅ uninstall.sh is idempotent (running twice shows "Nothing to uninstall")
+- ✅ Reinstall after uninstall works correctly
+- ✅ Arc running detection works (shows notification when Arc not running)
+- ✅ Landing page filtering works (meet.google.com/landing not treated as meeting)
+
+### Edge Cases Discovered and Fixed:
+1. **Landing page timeout issue**: The original script matched ALL meet.google.com URLs including
+   landing pages, homepage, and other non-meeting pages. JavaScript execution on these pages would
+   hang indefinitely because there's no mute button to query.
+   
+   **Fix**: Updated URL matching to filter out non-meeting pages:
+   - meet.google.com/landing
+   - meet.google.com/ (homepage)
+   - meet.google.com/?authuser=N
+   - meet.google.com/new
+   - meet.google.com/lookup
+   
+   Now only actual meeting room URLs (meet.google.com/xxx-xxxx-xxx) are processed.
+
+2. **JavaScript execution timeout**: Arc's `execute javascript` command can hang if a tab is
+   unresponsive or in a specific state.
+   
+   **Fix**: Added `with timeout of 3 seconds` wrapper around all JavaScript execution calls.
+   If timeout occurs, the tab is skipped and processing continues.
+
+3. **Updated notification message**: Changed "No Google Meet tabs found" to "No active Google 
+   Meet calls found" to be more accurate about what the script is looking for.
+
+### Manual Tests Required (documented for user):
+- Keyboard shortcut works when Arc is focused (requires active meeting)
+- Keyboard shortcut works when another app is focused (global) (requires active meeting)
+- Mute state syncing works with multiple tabs (requires multiple active meetings)
+- Notifications display correctly during mute toggle (requires active meeting)
+
+### Files Modified:
+- install.sh: Added URL filtering for landing pages, added timeout for JavaScript execution
+---

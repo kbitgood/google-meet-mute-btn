@@ -114,15 +114,27 @@ cat > "$CONTENTS_DIR/document.wflow" << 'DOCUMENTWFLOW'
     tell application "Arc"
         set meetTabs to {}
         
-        -- Iterate all windows and tabs to find Meet tabs
+        -- Iterate all windows and tabs to find active Meet tabs (in a meeting, not landing page)
         try
             repeat with w in windows
                 try
                     repeat with t in tabs of w
                         try
                             set tabURL to URL of t
-                            if tabURL contains "meet.google.com" then
-                                set end of meetTabs to t
+                            -- Only match actual meeting URLs (contain meet.google.com/ followed by meeting code)
+                            -- Filter out: landing, new, lookup, etc pages
+                            if tabURL contains "meet.google.com/" then
+                                -- Check if it's NOT a non-meeting page
+                                set isMeetingPage to true
+                                if tabURL contains "/landing" then set isMeetingPage to false
+                                if tabURL ends with "meet.google.com/" then set isMeetingPage to false
+                                if tabURL contains "meet.google.com/?authuser" then set isMeetingPage to false
+                                if tabURL contains "/new" then set isMeetingPage to false
+                                if tabURL contains "/lookup" then set isMeetingPage to false
+                                
+                                if isMeetingPage then
+                                    set end of meetTabs to t
+                                end if
                             end if
                         end try
                     end repeat
@@ -130,9 +142,9 @@ cat > "$CONTENTS_DIR/document.wflow" << 'DOCUMENTWFLOW'
             end repeat
         end try
         
-        -- Handle no Meet tabs found
+        -- Handle no active Meet tabs found
         if (count of meetTabs) = 0 then
-            display notification "No Google Meet tabs found" with title "Google Meet Mute" sound name "Basso"
+            display notification "No active Google Meet calls found" with title "Google Meet Mute" sound name "Basso"
             return input
         end if
         
@@ -163,13 +175,17 @@ cat > "$CONTENTS_DIR/document.wflow" << 'DOCUMENTWFLOW'
             })();
         "
         
-        -- Get the mute state of the first tab to determine target state
+        -- Get the mute state of the first tab to determine target state (with timeout)
         set firstTab to item 1 of meetTabs
         set firstTabState to "unknown"
         try
-            tell firstTab
-                set firstTabState to execute javascript checkMuteJS
-            end tell
+            with timeout of 3 seconds
+                tell firstTab
+                    set firstTabState to execute javascript checkMuteJS
+                end tell
+            end timeout
+        on error
+            set firstTabState to "unknown"
         end try
         
         -- Determine target state: if first is muted, we unmute all; if unmuted, we mute all
@@ -185,26 +201,28 @@ cat > "$CONTENTS_DIR/document.wflow" << 'DOCUMENTWFLOW'
         set affectedCount to 0
         repeat with meetTab in meetTabs
             try
-                -- Check current state of this tab
-                set currentState to "unknown"
-                tell meetTab
-                    set currentState to execute javascript checkMuteJS
-                end tell
-                
-                -- Only toggle if needed (or if state is unknown)
-                set needsToggle to false
-                if targetState is "unknown" then
-                    set needsToggle to true
-                else if currentState is not targetState then
-                    set needsToggle to true
-                end if
-                
-                if needsToggle then
+                with timeout of 3 seconds
+                    -- Check current state of this tab
+                    set currentState to "unknown"
                     tell meetTab
-                        execute javascript toggleMuteJS
+                        set currentState to execute javascript checkMuteJS
                     end tell
-                    set affectedCount to affectedCount + 1
-                end if
+                    
+                    -- Only toggle if needed (or if state is unknown)
+                    set needsToggle to false
+                    if targetState is "unknown" then
+                        set needsToggle to true
+                    else if currentState is not targetState then
+                        set needsToggle to true
+                    end if
+                    
+                    if needsToggle then
+                        tell meetTab
+                            execute javascript toggleMuteJS
+                        end tell
+                        set affectedCount to affectedCount + 1
+                    end if
+                end timeout
             end try
         end repeat
         
