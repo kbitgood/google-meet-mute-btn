@@ -24,7 +24,7 @@ Press **F5** from anywhere and all your Meet tabs instantly mute/unmute with aud
 2. Clone this repo and run the install script:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/google-meet-mute-btn.git
+git clone https://github.com/kbitgood/google-meet-mute-btn.git
 cd google-meet-mute-btn
 ./install.sh
 ```
