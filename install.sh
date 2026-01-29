@@ -1,418 +1,287 @@
 #!/bin/bash
 
 # Google Meet Global Mute Button - Install Script
-# Creates a macOS Quick Action that toggles mute in all Google Meet tabs in Arc browser
+# Creates a toggle script and configures Karabiner-Elements to trigger it with F5
 
 set -e
 
 # Configuration
-WORKFLOW_NAME="Toggle Google Meet Mute"
-WORKFLOW_DIR="$HOME/Library/Services/${WORKFLOW_NAME}.workflow"
-CONTENTS_DIR="$WORKFLOW_DIR/Contents"
+SCRIPT_DIR="$HOME/.local/bin"
+SCRIPT_PATH="$SCRIPT_DIR/toggle-meet-mute.sh"
+KARABINER_CONFIG="$HOME/.config/karabiner/karabiner.json"
+RULE_DESCRIPTION="Google Meet Mute (F5/Dictation key toggles mute)"
 
 echo "================================================"
 echo "Google Meet Global Mute Button - Installer"
 echo "================================================"
 echo ""
 
-# Remove existing workflow if present (idempotent)
-if [ -d "$WORKFLOW_DIR" ]; then
-    echo "Removing existing workflow..."
-    rm -rf "$WORKFLOW_DIR"
+# Check if Karabiner config exists
+if [ ! -f "$KARABINER_CONFIG" ]; then
+    echo "ERROR: Karabiner-Elements config not found at:"
+    echo "  $KARABINER_CONFIG"
+    echo ""
+    echo "Please install Karabiner-Elements first:"
+    echo "  https://karabiner-elements.pqrs.org/"
+    exit 1
 fi
 
-# Create directory structure
-echo "Creating workflow directory structure..."
-mkdir -p "$CONTENTS_DIR"
+# Create script directory
+mkdir -p "$SCRIPT_DIR"
 
-# Create Info.plist
-echo "Creating Info.plist..."
-cat > "$CONTENTS_DIR/Info.plist" << 'INFOPLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>NSServices</key>
-    <array>
-        <dict>
-            <key>NSMenuItem</key>
-            <dict>
-                <key>default</key>
-                <string>Toggle Google Meet Mute</string>
-            </dict>
-            <key>NSMessage</key>
-            <string>runWorkflowAsService</string>
-            <key>NSRequiredContext</key>
-            <dict/>
-            <key>NSSendTypes</key>
-            <array/>
-            <key>NSReturnTypes</key>
-            <array/>
-        </dict>
-    </array>
-</dict>
-</plist>
-INFOPLIST
+# Create the main bash script that handles parallelization
+echo "Creating toggle script at $SCRIPT_PATH..."
+cat > "$SCRIPT_PATH" << 'SCRIPT'
+#!/bin/bash
+# Google Meet Mute Toggle Script
+# Called by Karabiner-Elements
+# Sounds: Morse=muted, Pop=unmuted, Basso=error/none
+#
+# Strategy: Run parallel osascript processes for each window with short timeouts
+# Use the first results that come back, ignore slow/stuck windows
 
-# Create document.wflow (Automator workflow definition)
-# This is a minimal Automator workflow structure with a placeholder for AppleScript
-echo "Creating document.wflow..."
-cat > "$CONTENTS_DIR/document.wflow" << 'DOCUMENTWFLOW'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>AMApplicationBuild</key>
-    <string>523</string>
-    <key>AMApplicationVersion</key>
-    <string>2.10</string>
-    <key>AMDocumentVersion</key>
-    <string>2</string>
-    <key>actions</key>
-    <array>
-        <dict>
-            <key>action</key>
-            <dict>
-                <key>AMAccepts</key>
-                <dict>
-                    <key>Container</key>
-                    <string>List</string>
-                    <key>Optional</key>
-                    <true/>
-                    <key>Types</key>
-                    <array>
-                        <string>com.apple.cocoa.string</string>
-                    </array>
-                </dict>
-                <key>AMActionVersion</key>
-                <string>1.0.2</string>
-                <key>AMApplication</key>
-                <array>
-                    <string>Automator</string>
-                </array>
-                <key>AMCategory</key>
-                <string>AMCategoryUtilities</string>
-                <key>AMIconName</key>
-                <string>Automator</string>
-                <key>AMName</key>
-                <string>Run AppleScript</string>
-                <key>AMParameters</key>
-                <dict>
-                    <key>source</key>
-                    <string>on run {input, parameters}
-    -- Google Meet Global Mute Toggle
-    -- Finds all Meet tabs in Arc and toggles them to the same mute state
-    
-    set appName to "Arc"
-    
-    -- Check if Arc is running
-    if application appName is not running then
-        display notification "Arc browser is not running" with title "Google Meet Mute" sound name "Basso"
-        return input
-    end if
-    
-    tell application "Arc"
-        set meetTabs to {}
-        
-        -- Iterate all windows and tabs to find active Meet tabs (in a meeting, not landing page)
+TIMEOUT_SEC=0.15
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+# Suppress job control messages
+set +m
+exec 2>/dev/null
+
+# Check if Arc is running
+if ! pgrep -q "Arc"; then
+    afplay /System/Library/Sounds/Basso.aiff &
+    exit 0
+fi
+
+# Phase 1: Get Meet tab locations from all windows (fast, no JS)
+# Output format: winNum:tabIdx:meetingURL (one per line)
+meet_tabs=$(osascript << 'EOF'
+tell application "Arc"
+    set output to ""
+    set windowCount to count of windows
+    repeat with winNum from 1 to windowCount
         try
-            repeat with w in windows
-                try
-                    repeat with t in tabs of w
-                        try
-                            set tabURL to URL of t
-                            -- Only match actual meeting URLs (contain meet.google.com/ followed by meeting code)
-                            -- Filter out: landing, new, lookup, etc pages
-                            if tabURL contains "meet.google.com/" then
-                                -- Check if it's NOT a non-meeting page
-                                set isMeetingPage to true
-                                if tabURL contains "/landing" then set isMeetingPage to false
-                                if tabURL ends with "meet.google.com/" then set isMeetingPage to false
-                                if tabURL contains "meet.google.com/?authuser" then set isMeetingPage to false
-                                if tabURL contains "/new" then set isMeetingPage to false
-                                if tabURL contains "/lookup" then set isMeetingPage to false
-                                
-                                if isMeetingPage then
-                                    set end of meetTabs to t
-                                end if
-                            end if
-                        end try
-                    end repeat
-                end try
+            set allURLs to URL of every tab of window winNum
+            repeat with i from 1 to count of allURLs
+                set tabURL to item i of allURLs
+                if tabURL contains "meet.google.com" and tabURL does not contain "/landing" then
+                    set output to output & winNum & ":" & i & ":" & tabURL & linefeed
+                end if
             end repeat
         end try
-        
-        -- Handle no active Meet tabs found
-        if (count of meetTabs) = 0 then
-            display notification "No active Google Meet calls found" with title "Google Meet Mute" sound name "Basso"
-            return input
-        end if
-        
-        -- JavaScript to check if muted (returns "muted" or "unmuted" or "unknown")
-        set checkMuteJS to "
-            (function() {
-                var btn = document.querySelector('[aria-label*=\"microphone\"]');
-                if (!btn) return 'unknown';
-                var label = btn.getAttribute('aria-label') || '';
-                if (label.includes('Turn on')) return 'muted';
-                if (label.includes('Turn off')) return 'unmuted';
-                return 'unknown';
-            })();
-        "
-        
-        -- JavaScript to toggle mute using Cmd+D keyboard shortcut
-        set toggleMuteJS to "
-            (function() {
-                document.dispatchEvent(new KeyboardEvent('keydown', {
-                    key: 'd',
-                    code: 'KeyD',
-                    keyCode: 68,
-                    which: 68,
-                    metaKey: true,
-                    bubbles: true
-                }));
-                return 'toggled';
-            })();
-        "
-        
-        -- Get the mute state of the first tab to determine target state (with timeout)
-        set firstTab to item 1 of meetTabs
-        set firstTabState to "unknown"
-        try
-            with timeout of 3 seconds
-                tell firstTab
-                    set firstTabState to execute javascript checkMuteJS
-                end tell
-            end timeout
-        on error
-            set firstTabState to "unknown"
-        end try
-        
-        -- Determine target state: if first is muted, we unmute all; if unmuted, we mute all
-        -- If unknown, we just toggle all
-        set targetState to "unknown"
-        if firstTabState is "muted" then
-            set targetState to "unmuted"
-        else if firstTabState is "unmuted" then
-            set targetState to "muted"
-        end if
-        
-        -- Process each Meet tab
-        set affectedCount to 0
-        repeat with meetTab in meetTabs
-            try
-                with timeout of 3 seconds
-                    -- Check current state of this tab
-                    set currentState to "unknown"
-                    tell meetTab
-                        set currentState to execute javascript checkMuteJS
-                    end tell
-                    
-                    -- Only toggle if needed (or if state is unknown)
-                    set needsToggle to false
-                    if targetState is "unknown" then
-                        set needsToggle to true
-                    else if currentState is not targetState then
-                        set needsToggle to true
-                    end if
-                    
-                    if needsToggle then
-                        tell meetTab
-                            execute javascript toggleMuteJS
-                        end tell
-                        set affectedCount to affectedCount + 1
-                    end if
-                end timeout
-            end try
-        end repeat
-        
-        -- Show result notification
-        set tabWord to "tab"
-        if affectedCount is not 1 then
-            set tabWord to "tabs"
-        end if
-        
-        if targetState is "muted" then
-            display notification "Muted " &amp; affectedCount &amp; " " &amp; tabWord with title "Google Meet Mute"
-        else if targetState is "unmuted" then
-            display notification "Unmuted " &amp; affectedCount &amp; " " &amp; tabWord with title "Google Meet Mute"
-        else
-            display notification "Toggled " &amp; affectedCount &amp; " " &amp; tabWord with title "Google Meet Mute"
-        end if
-        
-    end tell
+    end repeat
+    return output
+end tell
+EOF
+)
+
+if [ -z "$meet_tabs" ]; then
+    afplay /System/Library/Sounds/Basso.aiff &
+    exit 0
+fi
+
+# Save meet tabs to file for processing
+echo "$meet_tabs" > "$TMPDIR/meet_tabs.txt"
+
+# Get unique meeting URLs
+cut -d: -f3- "$TMPDIR/meet_tabs.txt" | sort -u > "$TMPDIR/unique_meetings.txt"
+
+if [ ! -s "$TMPDIR/unique_meetings.txt" ]; then
+    afplay /System/Library/Sounds/Basso.aiff &
+    exit 0
+fi
+
+# Phase 2: For each unique meeting, try all its window locations in parallel
+# Launch all processes at once
+while IFS=: read -r winNum tabIdx meetingURL; do
+    [ -z "$meetingURL" ] && continue
+    # Create unique filename from meeting URL
+    safe_name=$(echo "$meetingURL" | md5)
+    result_file="$TMPDIR/state_${safe_name}"
     
-    return input
-end run</string>
-                </dict>
-                <key>AMProvides</key>
-                <dict>
-                    <key>Container</key>
-                    <string>List</string>
-                    <key>Types</key>
-                    <array>
-                        <string>com.apple.cocoa.string</string>
-                    </array>
-                </dict>
-                <key>AMRequiredResources</key>
-                <array/>
-                <key>AMTag</key>
-                <string>RunAppleScript</string>
-                <key>ActionBundlePath</key>
-                <string>/System/Library/Automator/Run AppleScript.action</string>
-                <key>ActionName</key>
-                <string>Run AppleScript</string>
-                <key>ActionParameters</key>
-                <dict/>
-                <key>BundleIdentifier</key>
-                <string>com.apple.Automator.RunScript</string>
-                <key>CFBundleVersion</key>
-                <string>1.0.2</string>
-                <key>CanShowSelectedItemsWhenRun</key>
-                <false/>
-                <key>CanShowWhenRun</key>
-                <true/>
-                <key>Category</key>
-                <array>
-                    <string>AMCategoryUtilities</string>
-                </array>
-                <key>Class Name</key>
-                <string>RunScriptAction</string>
-                <key>InputUUID</key>
-                <string>BFCA72F3-8E3E-4F9C-A9B7-7E8A1234ABCD</string>
-                <key>Keywords</key>
-                <array>
-                    <string>Run</string>
-                </array>
-                <key>OutputUUID</key>
-                <string>BFCA72F3-8E3E-4F9C-A9B7-7E8A5678EFGH</string>
-                <key>UUID</key>
-                <string>BFCA72F3-8E3E-4F9C-A9B7-7E8AABCDEFGH</string>
-                <key>UnlocalizedApplications</key>
-                <array>
-                    <string>Automator</string>
-                </array>
-                <key>arguments</key>
-                <dict>
-                    <key>0</key>
-                    <dict>
-                        <key>default value</key>
-                        <string>on run {input, parameters}
-    return input
-end run</string>
-                        <key>name</key>
-                        <string>source</string>
-                        <key>required</key>
-                        <string>0</string>
-                        <key>type</key>
-                        <string>0</string>
-                        <key>uuid</key>
-                        <string>0</string>
-                    </dict>
-                </dict>
-                <key>isViewVisible</key>
-                <integer>1</integer>
-                <key>location</key>
-                <string>449.500000:305.000000</string>
-                <key>nibPath</key>
-                <string>/System/Library/Automator/Run AppleScript.action/Contents/Resources/Base.lproj/main.nib</string>
-            </dict>
-            <key>isViewVisible</key>
-            <integer>1</integer>
-        </dict>
-    </array>
-    <key>connectors</key>
-    <dict/>
-    <key>workflowMetaData</key>
-    <dict>
-        <key>applicationBundleID</key>
-        <string>com.apple.Automator</string>
-        <key>applicationBundleIDsByPath</key>
-        <dict/>
-        <key>applicationPath</key>
-        <string>/System/Applications/Automator.app</string>
-        <key>applicationPaths</key>
-        <array/>
-        <key>backgroundColor</key>
-        <data>
-        YnBsaXN0MDDUAQIDBAUGBwpYJHZlcnNpb25ZJGFyY2hpdmVyVCR0b3BYJG9i
-        amVjdHMSAAGGoF8QD05TS2V5ZWRBcmNoaXZlctEICVRyb290gAGjCwwTVSRu
-        dWxs0w0ODxARElVuc1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTxAnMC43MDU5
-        MzEzNzI1IDAuNzA1OTMxMzcyNSAwLjcwNTkzMTM3MjUAEAGAAtIUFRYXWiRj
-        bGFzc25hbWVYJGNsYXNzZXNXTlNDb2xvcqIWGFhOU09iamVjdAgRGiQpMjdJ
-        TFFTVltiaXB9kJKXorO2vgAAAAAAAAEBAAAAAAAAABkAAAAAAAAAAAAAAAAA
-        AADH
-        </data>
-        <key>inputTypeIdentifier</key>
-        <string>com.apple.Automator.nothing</string>
-        <key>outputTypeIdentifier</key>
-        <string>com.apple.Automator.nothing</string>
-        <key>presentationMode</key>
-        <integer>15</integer>
-        <key>processesInput</key>
-        <integer>0</integer>
-        <key>serviceApplicationBundleID</key>
-        <string>com.apple.finder</string>
-        <key>serviceApplicationPath</key>
-        <string>/System/Library/CoreServices/Finder.app</string>
-        <key>serviceInputTypeIdentifier</key>
-        <string>com.apple.Automator.nothing</string>
-        <key>serviceOutputTypeIdentifier</key>
-        <string>com.apple.Automator.nothing</string>
-        <key>serviceProcessesInput</key>
-        <integer>0</integer>
-        <key>systemImageName</key>
-        <string>NSTouchBarDownload</string>
-        <key>useAutomaticInputType</key>
-        <integer>0</integer>
-        <key>workflowTypeIdentifier</key>
-        <string>com.apple.Automator.servicesMenu</string>
-    </dict>
-</dict>
-</plist>
-DOCUMENTWFLOW
+    # Only launch if we haven't already launched for this meeting
+    if [ ! -f "$TMPDIR/launched_${safe_name}" ]; then
+        touch "$TMPDIR/launched_${safe_name}"
+    fi
+    
+    # Launch in background with osascript timeout
+    (
+        result=$(osascript 2>/dev/null << INNEREOF
+tell application "Arc"
+    with timeout of 1 seconds
+        tell tab $tabIdx of window $winNum
+            execute javascript "(() => { const btn = document.querySelector('[aria-label*=microphone]'); return btn ? btn.getAttribute('aria-label') : 'not-in-meeting'; })()"
+        end tell
+    end timeout
+end tell
+INNEREOF
+        )
+        if [ -n "$result" ] && [[ "$result" != *"not-in-meeting"* ]]; then
+            # Only write if no result yet (first wins)
+            if [ ! -f "$result_file" ]; then
+                if [[ "$result" == *"Turn off"* ]]; then
+                    echo "$winNum:$tabIdx:unmuted" > "$result_file"
+                else
+                    echo "$winNum:$tabIdx:muted" > "$result_file"
+                fi
+            fi
+        fi
+    ) 2>/dev/null &
+done < "$TMPDIR/meet_tabs.txt"
 
-echo ""
-echo "Workflow created at: $WORKFLOW_DIR"
+# Wait for timeout then kill stragglers
+sleep $TIMEOUT_SEC
+pkill -P $$ 2>/dev/null
+wait 2>/dev/null
+
+# Collect results
+any_unmuted=false
+while read -r meetingURL; do
+    [ -z "$meetingURL" ] && continue
+    safe_name=$(echo "$meetingURL" | md5)
+    result_file="$TMPDIR/state_${safe_name}"
+    
+    if [ -f "$result_file" ]; then
+        result=$(cat "$result_file")
+        state="${result##*:}"
+        if [ "$state" = "unmuted" ]; then
+            any_unmuted=true
+        fi
+    fi
+done < "$TMPDIR/unique_meetings.txt"
+
+# Check if we got any results
+result_count=$(ls "$TMPDIR"/state_* 2>/dev/null | wc -l)
+if [ "$result_count" -eq 0 ]; then
+    afplay /System/Library/Sounds/Basso.aiff &
+    exit 0
+fi
+
+# Phase 3: Toggle tabs that need to change
+if $any_unmuted; then
+    target_state="muted"
+else
+    target_state="unmuted"
+fi
+
+# Toggle each meeting that needs it
+while read -r meetingURL; do
+    [ -z "$meetingURL" ] && continue
+    safe_name=$(echo "$meetingURL" | md5)
+    result_file="$TMPDIR/state_${safe_name}"
+    
+    if [ -f "$result_file" ]; then
+        result=$(cat "$result_file")
+        winNum="${result%%:*}"
+        rest="${result#*:}"
+        tabIdx="${rest%%:*}"
+        current_state="${rest##*:}"
+        
+        if [ "$current_state" != "$target_state" ]; then
+            # Fire and forget toggle
+            osascript 2>/dev/null << TOGGLEEOF &
+tell application "Arc"
+    with timeout of 1 seconds
+        tell tab $tabIdx of window $winNum
+            execute javascript "document.dispatchEvent(new KeyboardEvent('keydown',{key:'d',code:'KeyD',keyCode:68,metaKey:true,bubbles:true}));"
+        end tell
+    end timeout
+end tell
+TOGGLEEOF
+        fi
+    fi
+done < "$TMPDIR/unique_meetings.txt"
+
+# Brief wait for toggles
+sleep 0.05
+
+# Play sound based on final state
+if [ "$target_state" = "muted" ]; then
+    afplay /System/Library/Sounds/Morse.aiff &
+else
+    afplay /System/Library/Sounds/Pop.aiff &
+fi
+SCRIPT
+
+chmod +x "$SCRIPT_PATH"
+echo "  Created: $SCRIPT_PATH"
 echo ""
 
-# Register keyboard shortcut
-echo "Registering keyboard shortcut (Ctrl+Shift+Option+Cmd+M)..."
+# Check if rule already exists in Karabiner config
+echo "Configuring Karabiner-Elements..."
 
-# Refresh services first so pbs knows about the new workflow
-/System/Library/CoreServices/pbs -update 2>/dev/null || true
+if grep -q "$RULE_DESCRIPTION" "$KARABINER_CONFIG" 2>/dev/null; then
+    echo "  Karabiner rule already exists, skipping..."
+else
+    # Use Python to safely add the rule to the JSON config
+    python3 << PYTHON
+import json
 
-# Wait a moment for pbs to update
-sleep 1
+config_path = "$KARABINER_CONFIG"
 
-# Register the keyboard shortcut using PlistBuddy
-# Modifier encoding: ^ = Control, $ = Shift, ~ = Option, @ = Command
-# ^$~@m = Ctrl+Shift+Option+Cmd+M
-PBS_PLIST="$HOME/Library/Preferences/pbs.plist"
-SERVICE_KEY="(null) - Toggle Google Meet Mute - runWorkflowAsService"
+with open(config_path, 'r') as f:
+    config = json.load(f)
 
-# Remove existing entry if present (for idempotency)
-/usr/libexec/PlistBuddy -c "Delete ':NSServicesStatus:$SERVICE_KEY'" "$PBS_PLIST" 2>/dev/null || true
+# Find the selected profile
+for profile in config.get('profiles', []):
+    if profile.get('selected', False):
+        # Ensure complex_modifications exists
+        if 'complex_modifications' not in profile:
+            profile['complex_modifications'] = {'rules': []}
+        if 'rules' not in profile['complex_modifications']:
+            profile['complex_modifications']['rules'] = []
+        
+        # Check if rule already exists
+        rules = profile['complex_modifications']['rules']
+        rule_exists = any(r.get('description') == "$RULE_DESCRIPTION" for r in rules)
+        
+        if not rule_exists:
+            # Add new rule at the beginning
+            new_rule = {
+                "description": "$RULE_DESCRIPTION",
+                "enabled": True,
+                "manipulators": [
+                    {
+                        "from": {
+                            "key_code": "f5",
+                            "modifiers": {"optional": ["caps_lock"]}
+                        },
+                        "to": [
+                            {"shell_command": "~/.local/bin/toggle-meet-mute.sh"}
+                        ],
+                        "type": "basic"
+                    }
+                ]
+            }
+            rules.insert(0, new_rule)
+            print("  Added Karabiner rule")
+        else:
+            print("  Rule already exists")
+        break
 
-# Add new entry with keyboard shortcut
-/usr/libexec/PlistBuddy -c "Add ':NSServicesStatus:$SERVICE_KEY' dict" "$PBS_PLIST"
-/usr/libexec/PlistBuddy -c 'Add ":NSServicesStatus:(null) - Toggle Google Meet Mute - runWorkflowAsService:key_equivalent" string "^$~@m"' "$PBS_PLIST"
+with open(config_path, 'w') as f:
+    json.dump(config, f, indent=4)
+PYTHON
 
-# Refresh services again to apply the shortcut
-/System/Library/CoreServices/pbs -update 2>/dev/null || true
+fi
 
 echo ""
 echo "================================================"
 echo "Installation complete!"
 echo "================================================"
 echo ""
-echo "Keyboard shortcut: Ctrl + Shift + Option + Cmd + M"
+echo "Keyboard shortcut: F5 (dictation key)"
 echo ""
-echo "The shortcut should be active now. You can verify it at:"
-echo "  System Settings > Keyboard > Keyboard Shortcuts > Services"
-echo "  Look for 'Toggle Google Meet Mute' under 'General'"
+echo "Sound feedback:"
+echo "  - Morse (beep): You are now MUTED"
+echo "  - Pop: You are now UNMUTED"
+echo "  - Basso (low tone): No Meet tab found or error"
 echo ""
-echo "NOTE: If the shortcut doesn't work immediately, try:"
-echo "  - Log out and log back in"
-echo "  - Or restart your Mac"
+echo "Files installed:"
+echo "  - $SCRIPT_PATH"
+echo "  - Karabiner rule in $KARABINER_CONFIG"
+echo ""
+echo "The shortcut should work immediately."
+echo "Press F5 to toggle mute on Google Meet."
 echo ""
