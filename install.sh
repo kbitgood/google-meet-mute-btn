@@ -357,10 +357,44 @@ DOCUMENTWFLOW
 echo ""
 echo "Workflow created at: $WORKFLOW_DIR"
 echo ""
+
+# Register keyboard shortcut
+echo "Registering keyboard shortcut (Ctrl+Shift+Option+Cmd+M)..."
+
+# Refresh services first so pbs knows about the new workflow
+/System/Library/CoreServices/pbs -update 2>/dev/null || true
+
+# Wait a moment for pbs to update
+sleep 1
+
+# Register the keyboard shortcut using PlistBuddy
+# Modifier encoding: ^ = Control, $ = Shift, ~ = Option, @ = Command
+# ^$~@m = Ctrl+Shift+Option+Cmd+M
+PBS_PLIST="$HOME/Library/Preferences/pbs.plist"
+SERVICE_KEY="(null) - Toggle Google Meet Mute - runWorkflowAsService"
+
+# Remove existing entry if present (for idempotency)
+/usr/libexec/PlistBuddy -c "Delete ':NSServicesStatus:$SERVICE_KEY'" "$PBS_PLIST" 2>/dev/null || true
+
+# Add new entry with keyboard shortcut
+/usr/libexec/PlistBuddy -c "Add ':NSServicesStatus:$SERVICE_KEY' dict" "$PBS_PLIST"
+/usr/libexec/PlistBuddy -c 'Add ":NSServicesStatus:(null) - Toggle Google Meet Mute - runWorkflowAsService:key_equivalent" string "^$~@m"' "$PBS_PLIST"
+
+# Refresh services again to apply the shortcut
+/System/Library/CoreServices/pbs -update 2>/dev/null || true
+
+echo ""
 echo "================================================"
 echo "Installation complete!"
 echo "================================================"
-echo "Next steps:"
-echo "1. Assign a keyboard shortcut in System Settings > Keyboard > Keyboard Shortcuts > Services"
-echo "2. Look for 'Toggle Google Meet Mute' under 'General'"
+echo ""
+echo "Keyboard shortcut: Ctrl + Shift + Option + Cmd + M"
+echo ""
+echo "The shortcut should be active now. You can verify it at:"
+echo "  System Settings > Keyboard > Keyboard Shortcuts > Services"
+echo "  Look for 'Toggle Google Meet Mute' under 'General'"
+echo ""
+echo "NOTE: If the shortcut doesn't work immediately, try:"
+echo "  - Log out and log back in"
+echo "  - Or restart your Mac"
 echo ""
